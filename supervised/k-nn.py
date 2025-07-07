@@ -1,3 +1,5 @@
+# Implementation of https://arxiv.org/pdf/1511.00628
+
 import numpy as np
 import heapq
 
@@ -25,7 +27,15 @@ class KNN:
         self.algorithm = algorithm
 
         if algorithm == "ball_tree":
-            self.root = self.build_tree(self.x, self.y)
+            self.root = self.build_ball_tree(self.x, self.y)
+        elif algorithm == "ball_star_tree":
+            self.root = self.build_ball_star_tree(self.x, self.y)
+
+    def PCA(self, points):
+        center = np.mean(points, axis=0)
+        centered_points = points - center
+        u, s, vh = np.linalg.svd(centered_points, full_matrices=False)
+        return centered_points @ vh[0], center
 
     def majority_vote(self, arr):
         values, counts = np.unique(arr, return_counts=True)
@@ -44,7 +54,7 @@ class KNN:
 
         return predictions
 
-    def build_tree(self, points, labels):
+    def build_ball_tree(self, points, labels):
         n = len(points)
         if n <= self.leaf_size:
             center = np.mean(points, axis=0)
@@ -70,8 +80,8 @@ class KNN:
                 right_points.append(points[i])
                 right_labels.append(labels[i])
 
-        left = self.build_tree(np.array(left_points), np.array(left_labels))
-        right = self.build_tree(np.array(right_points), np.array(right_labels))
+        left = self.build_ball_tree(np.array(left_points), np.array(left_labels))
+        right = self.build_ball_tree(np.array(right_points), np.array(right_labels))
 
         center = np.mean(points, axis=0)
         radius = np.max(np.linalg.norm(points - center, axis=1))
@@ -82,29 +92,85 @@ class KNN:
 
         return node
 
+    def build_ball_star_tree(self, points, labels):
+        if len(points) <= self.leaf_size:
+            center = np.mean(points, axis=0)
+            radius = np.max(np.linalg.norm(points - center, axis=1)) if len(points) > 0 else 0
+            return BallTreeNode(center, radius, points, labels)
+
+        # Find first principle
+        projections, center = self.PCA(points)
+        sorted_indices = np.argsort(projections)
+        points = points[sorted_indices]
+        labels = labels[sorted_indices]
+
+        # Find best split
+        num_candidates = 10
+        best_score = float("inf")
+        best_idx = None
+        n = len(points)
+
+        for i in range(n // num_candidates, n - n // num_candidates, n // num_candidates):
+
+            # Calculate values for scoring
+            left_points = points[:i]
+            right_points = points[i:]
+            left_center = np.mean(left_points, axis=0)
+            right_center = np.mean(right_points, axis=0)
+            left_radius = np.max(np.linalg.norm(left_points - left_center, axis=1))
+            right_radius = np.max(np.linalg.norm(right_points - right_center, axis=1))
+
+            # Scoring function
+            balance_term = abs(len(left_points) - len(right_points)) / n
+            overlap = max(0, (left_radius + right_radius - np.linalg.norm(left_center - right_center)))
+            score = 0.8 * overlap + 0.2 * balance_term
+
+            if score < best_score:
+                best_score = score
+                best_idx = i
+
+        left = self.build_ball_star_tree(points[:best_idx], labels[:best_idx])
+        right = self.build_ball_star_tree(points[best_idx:], labels[best_idx:])
+
+        center = np.mean(points, axis=0)
+        radius = np.max(np.linalg.norm(points - center, axis=1))
+
+        node = BallTreeNode(center, radius)
+        node.left = left
+        node.right = right
+        return node
+
     def ball_tree_search(self, node, target, k, heap):
         if node is None:
             return
 
         if node.points is not None:
             for i in range(len(node.points)):
-                dist = np.linalg.norm(target - node.points[i])
+                distance = np.linalg.norm(target - node.points[i])
                 if len(heap) < k:
-                    heapq.heappush(heap, (-dist, node.labels[i]))
+                    heapq.heappush(heap, (-distance, node.labels[i]))
                 else:
-                    if -dist > heap[0][0]:
-                        heapq.heappushpop(heap, (-dist, node.labels[i]))
+                    if distance < -heap[0][0]:
+                        heapq.heappushpop(heap, (-distance, node.labels[i]))
             return
 
-        distance_to_center = np.linalg.norm(target - node.center)
+        tau = -heap[0][0] if len(heap) == k else float('inf')
 
-        if node.left and distance_to_center < node.left.radius:
-            self.ball_tree_search(node.left, target, k, heap)
-            if node.right and distance_to_center - node.left.radius <= node.right.radius:
+        distance_left = np.linalg.norm(target - node.left.center) if node.left else float('inf')
+        distance_right = np.linalg.norm(target - node.right.center) if node.right else float('inf')
+
+        # Search closer child first
+        if distance_left < distance_right:
+            if distance_left - node.left.radius <= tau:
+                self.ball_tree_search(node.left, target, k, heap)
+                tau = -heap[0][0] if len(heap) == k else float('inf')
+            if distance_right - node.right.radius <= tau:
                 self.ball_tree_search(node.right, target, k, heap)
         else:
-            self.ball_tree_search(node.right, target, k, heap)
-            if node.left and distance_to_center - node.right.radius <= node.left.radius:
+            if distance_right - node.right.radius <= tau:
+                self.ball_tree_search(node.right, target, k, heap)
+                tau = -heap[0][0] if len(heap) == k else float('inf')
+            if distance_left - node.left.radius <= tau:
                 self.ball_tree_search(node.left, target, k, heap)
 
     def predict(self, x_test, k):
@@ -114,10 +180,10 @@ class KNN:
         if self.algorithm == "brute":
             return self.predict_brute(x_test, k)
 
-        elif self.algorithm == "ball_tree":
-            for x in x_test:
+        elif self.algorithm == "ball_tree" or self.algorithm == "ball_star_tree":
+            for xi in x_test:
                 heap = []
-                self.ball_tree_search(self.root, x, k, heap)
-                k_labels = [label for _, label in sorted(heap, key=lambda x: -x[0])]
+                self.ball_tree_search(self.root, xi, k, heap)
+                k_labels = [label for _, label in sorted(heap, key=lambda xi: -xi[0])]
                 predictions.append(self.majority_vote(k_labels))
             return predictions
