@@ -1,7 +1,7 @@
-# Implementation of https://arxiv.org/pdf/1511.00628
-
 import numpy as np
 import heapq
+from sklearn.datasets import load_iris
+import functools
 
 class BallTreeNode:
     def __init__(self, center, radius, points=None, labels=None):
@@ -42,6 +42,14 @@ class KNN:
         max_count_index = np.argmax(counts)
         return values[max_count_index]
 
+    def safe_tree_recursion(func):
+        @functools.wraps(func)
+        def wrapper(self, points, labels, *args, **kwargs):
+            if points is None or len(points) == 0:
+                return None
+            return func(self, points, labels, *args, **kwargs)
+        return wrapper
+
     def predict_brute(self, x_test, k):
         x_test = self._prep_features(x_test)
         predictions = []
@@ -54,6 +62,7 @@ class KNN:
 
         return predictions
 
+    @safe_tree_recursion
     def build_ball_tree(self, points, labels):
         n = len(points)
         if n <= self.leaf_size:
@@ -80,6 +89,12 @@ class KNN:
                 right_points.append(points[i])
                 right_labels.append(labels[i])
 
+        # Check for empty splits to avoid infinite recursion
+        if len(left_points) == 0 or len(right_points) == 0:
+            center = np.mean(points, axis=0)
+            radius = np.max(np.linalg.norm(points - center, axis=1))
+            return BallTreeNode(center, radius, points, labels)
+
         left = self.build_ball_tree(np.array(left_points), np.array(left_labels))
         right = self.build_ball_tree(np.array(right_points), np.array(right_labels))
 
@@ -92,13 +107,14 @@ class KNN:
 
         return node
 
+    @safe_tree_recursion
     def build_ball_star_tree(self, points, labels):
         if len(points) <= self.leaf_size:
             center = np.mean(points, axis=0)
             radius = np.max(np.linalg.norm(points - center, axis=1)) if len(points) > 0 else 0
             return BallTreeNode(center, radius, points, labels)
 
-        # Find first principle
+        # Find first principle component projections
         projections, center = self.PCA(points)
         sorted_indices = np.argsort(projections)
         points = points[sorted_indices]
@@ -111,8 +127,6 @@ class KNN:
         n = len(points)
 
         for i in range(n // num_candidates, n - n // num_candidates, n // num_candidates):
-
-            # Calculate values for scoring
             left_points = points[:i]
             right_points = points[i:]
             left_center = np.mean(left_points, axis=0)
@@ -120,7 +134,6 @@ class KNN:
             left_radius = np.max(np.linalg.norm(left_points - left_center, axis=1))
             right_radius = np.max(np.linalg.norm(right_points - right_center, axis=1))
 
-            # Scoring function
             balance_term = abs(len(left_points) - len(right_points)) / n
             overlap = max(0, (left_radius + right_radius - np.linalg.norm(left_center - right_center)))
             score = 0.8 * overlap + 0.2 * balance_term
@@ -128,6 +141,12 @@ class KNN:
             if score < best_score:
                 best_score = score
                 best_idx = i
+
+        # Check for no good split or empty splits
+        if best_idx is None or best_idx == 0 or best_idx == n:
+            center = np.mean(points, axis=0)
+            radius = np.max(np.linalg.norm(points - center, axis=1))
+            return BallTreeNode(center, radius, points, labels)
 
         left = self.build_ball_star_tree(points[:best_idx], labels[:best_idx])
         right = self.build_ball_star_tree(points[best_idx:], labels[best_idx:])
@@ -187,3 +206,16 @@ class KNN:
                 k_labels = [label for _, label in sorted(heap, key=lambda xi: -xi[0])]
                 predictions.append(self.majority_vote(k_labels))
             return predictions
+
+if __name__ == "__main__":
+    data = load_iris()
+    X, y = data.data, data.target
+    n = 100 # HOW many iris data points you want to check
+    model = KNN(leaf_size=2)
+    model.fit(X, y, algorithm="ball_tree")
+
+    predictions = model.predict(X[:n], k=3)
+    predictions = list(map(int, predictions))
+
+    for i in range(n):
+        print(predictions[i], y[i])
