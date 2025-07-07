@@ -1,7 +1,11 @@
 import numpy as np
 import heapq
-from sklearn.datasets import load_iris
+
+import sklearn.datasets
+from sklearn.datasets import load_iris, make_classification
+from sklearn.model_selection import train_test_split
 import functools
+import time
 
 class BallTreeNode:
     def __init__(self, center, radius, points=None, labels=None):
@@ -121,12 +125,12 @@ class KNN:
         labels = labels[sorted_indices]
 
         # Find best split
-        num_candidates = 10
         best_score = float("inf")
-        best_idx = None
         n = len(points)
+        num_candidates = min(n, 10)
+        step = max(1, n // num_candidates)
 
-        for i in range(n // num_candidates, n - n // num_candidates, n // num_candidates):
+        for i in range(step, n - step, step):
             left_points = points[:i]
             right_points = points[i:]
             left_center = np.mean(left_points, axis=0)
@@ -207,15 +211,40 @@ class KNN:
                 predictions.append(self.majority_vote(k_labels))
             return predictions
 
+def accuracy_score(target, predicted):
+    return np.mean(np.array(target) == np.array(predicted))
+
+
+def benchmark(model, X, y, k, algorithm):
+    start_fit = time.time()
+    model.fit(X, y, algorithm=algorithm)
+    fit_duration = time.time() - start_fit
+
+    start_pred = time.time()
+    predictions = model.predict(X, k)
+    pred_duration = time.time() - start_pred
+
+    acc = accuracy_score(y, predictions)
+    return acc, fit_duration, pred_duration
+
 if __name__ == "__main__":
-    data = load_iris()
-    X, y = data.data, data.target
-    n = 100 # HOW many iris data points you want to check
-    model = KNN(leaf_size=2)
-    model.fit(X, y, algorithm="ball_tree")
+    np.random.seed(42)
 
-    predictions = model.predict(X[:n], k=3)
-    predictions = list(map(int, predictions))
+    X, y = make_classification(n_samples=1000, n_features=50)
 
-    for i in range(n):
-        print(predictions[i], y[i])
+    model1 = KNN(leaf_size=2)
+    model2 = KNN(leaf_size=2)
+
+    acc1, fit_time1, pred_time1 = benchmark(model1, X, y, 3, algorithm="ball_tree")
+    acc2, fit_time2, pred_time2 = benchmark(model2, X, y, 3, algorithm="ball_star_tree")
+
+    print("Ball Tree Accuracy:", acc1)
+    print("Ball Tree Fit Time: ", fit_time1)
+    print("Ball Tree Predict Time:", pred_time1)
+
+    print("Ball* Tree Accuracy:", acc2)
+    print("Ball* Tree Fit Time: ", fit_time2)
+    print("Ball* Tree Predict Time:", pred_time2)
+
+    print("Percentage difference in fit time: ", (fit_time1 - fit_time2) * 100 / fit_time1)
+    print("Percentage difference in predict time: ", (pred_time1 - pred_time2) * 100 / pred_time1)
