@@ -1,8 +1,9 @@
+# https://arxiv.org/pdf/1511.00628
+
 import numpy as np
 import heapq
-
-import sklearn.datasets
-from sklearn.datasets import load_iris, make_classification
+from collections import Counter
+from sklearn.datasets import load_iris, make_classification, fetch_covtype, fetch_openml
 from sklearn.model_selection import train_test_split
 import functools
 import time
@@ -42,17 +43,7 @@ class KNN:
         return centered_points @ vh[0], center
 
     def majority_vote(self, arr):
-        values, counts = np.unique(arr, return_counts=True)
-        max_count_index = np.argmax(counts)
-        return values[max_count_index]
-
-    def safe_tree_recursion(func):
-        @functools.wraps(func)
-        def wrapper(self, points, labels, *args, **kwargs):
-            if points is None or len(points) == 0:
-                return None
-            return func(self, points, labels, *args, **kwargs)
-        return wrapper
+        return Counter(arr).most_common(1)[0][0]
 
     def predict_brute(self, x_test, k):
         x_test = self._prep_features(x_test)
@@ -66,7 +57,6 @@ class KNN:
 
         return predictions
 
-    @safe_tree_recursion
     def build_ball_tree(self, points, labels):
         n = len(points)
         if n <= self.leaf_size:
@@ -111,7 +101,6 @@ class KNN:
 
         return node
 
-    @safe_tree_recursion
     def build_ball_star_tree(self, points, labels):
         if len(points) <= self.leaf_size:
             center = np.mean(points, axis=0)
@@ -126,6 +115,7 @@ class KNN:
 
         # Find best split
         best_score = float("inf")
+        best_idx = None
         n = len(points)
         num_candidates = min(n, 10)
         step = max(1, n // num_candidates)
@@ -214,30 +204,33 @@ class KNN:
 def accuracy_score(target, predicted):
     return np.mean(np.array(target) == np.array(predicted))
 
-
-def benchmark(model, X, y, k, algorithm):
+def benchmark(model, X_train, y_train, X_test, y_test, k, algorithm):
     start_fit = time.time()
-    model.fit(X, y, algorithm=algorithm)
+    model.fit(X_train, y_train, algorithm=algorithm)
     fit_duration = time.time() - start_fit
 
     start_pred = time.time()
-    predictions = model.predict(X, k)
+    predictions = model.predict(X_test, k)
     pred_duration = time.time() - start_pred
 
-    acc = accuracy_score(y, predictions)
+    acc = accuracy_score(y_test, predictions)
     return acc, fit_duration, pred_duration
 
 if __name__ == "__main__":
-    np.random.seed(42)
+    # Prepare data
+    data = fetch_openml("mnist_784", version=1, as_frame=False)
+    X, y = data.data[:100], data.target.astype(int)[:100]
+    X = X / 255.0
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
-    X, y = make_classification(n_samples=1000, n_features=50)
-
+    # Initialise models
     model1 = KNN(leaf_size=2)
     model2 = KNN(leaf_size=2)
 
-    acc1, fit_time1, pred_time1 = benchmark(model1, X, y, 3, algorithm="ball_tree")
-    acc2, fit_time2, pred_time2 = benchmark(model2, X, y, 3, algorithm="ball_star_tree")
-
+    # Run benchmarks
+    acc1, fit_time1, pred_time1 = benchmark(model1, X_train, y_train, X_test, y_test, 3, algorithm="ball_tree")
+    acc2, fit_time2, pred_time2 = benchmark(model2, X_train, y_train, X_test, y_test, 3, algorithm="ball_star_tree")
+    # Print results
     print("Ball Tree Accuracy:", acc1)
     print("Ball Tree Fit Time: ", fit_time1)
     print("Ball Tree Predict Time:", pred_time1)
