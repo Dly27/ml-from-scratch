@@ -1,6 +1,30 @@
+# Paper: https://msl.cs.illinois.edu/~lavalle/papers/Lav98c.pdf
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
+
+
+def bresenham(x0, y0, x1, y1):
+    """Yield integer grid cells using Bresenham's algorithm."""
+    x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+
+    while True:
+        yield x0, y0
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
 
 class Node:
     def __init__(self, states):
@@ -17,6 +41,7 @@ class RRT:
         self.kd_tree = cKDTree(np.array(self.node_positions))
         self.kd_tree_needs_update = False
         self.rebuild_freq = rebuild_freq
+        self.path = []
 
     def add_state(self, states, parent):
         node = Node(states)
@@ -58,14 +83,12 @@ class RRT:
             return False
         # Check edges are in valid positions
         else:
-            num_points = int(np.linalg.norm(x2 - x1) / 0.1)
-            for alpha in np.linspace(0, 1, num_points):
-                point = (1 - alpha) * x1 + alpha * x2
-                point = np.floor(point).astype(int)
-                x_idx, y_idx = point[0], point[1]
-                if not (0 <= x_idx < self.map_width and 0 <= y_idx < self.map_height):
+            x0, y0 = np.floor(x1).astype(int)
+            x1_, y1_ = np.floor(x2).astype(int)
+            for x, y in bresenham(x0, y0, x1_, y1_):
+                if not (0 <= x < self.map_width and 0 <= y < self.map_height):
                     return False
-                if self.grid_map[y_idx, x_idx] == 1:
+                if self.grid_map[y, x] == 1:
                     return False
             return True
 
@@ -92,19 +115,24 @@ class RRT:
             self.kd_tree_needs_update = False
 
     def get_path(self, goal_node):
-        path = []
         current = goal_node
         while current is not None:
-            path.append(current.states)
+            self.path.append(current.states)
             current = current.parent
-        return path[::-1]
+        self.path = self.path[::-1]
+        return self.path
+
+    def path_cost(self):
+        return sum(np.linalg.norm(self.path[i+1] - self.path[i]) for i in range(len(self.path)-1))
 
 # ========== RUNNING TEST ==========
 
 grid_map = np.zeros((100, 100), dtype=int)
 
-start = [0, 0]
+start = [50, 80]
 goal_coords = np.array([90, 90])
+grid_map[0:40, 60:61] = 1
+grid_map[50:100, 60:61] = 1
 
 # Create RRT
 rrt = RRT(x_init=start, grid_map=grid_map, rebuild_freq=100)
@@ -113,6 +141,7 @@ rrt.grow(k=5000, goal=goal_coords, r=2.5)
 # Find path from start to goal
 nearest_to_goal = rrt.find_nearest_neighbour(goal_coords)
 path = rrt.get_path(nearest_to_goal)
+print(rrt.path_cost())
 
 # Draw nodes
 xs = [node.states[0] for node in rrt.nodes]
