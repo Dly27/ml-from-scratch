@@ -1,4 +1,5 @@
 # Paper: https://msl.cs.illinois.edu/~lavalle/papers/Lav98c.pdf
+# Paper: https://arxiv.org/pdf/1105.1186
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,7 +35,7 @@ class Node:
 
 
 class RRT:
-    def __init__(self, x_init, grid_map, rebuild_freq, goal, goal_bias):
+    def __init__(self, x_init, grid_map, rebuild_freq, goal, goal_bias, step):
         self.x_init = np.array(x_init)
         self.nodes = [Node(self.x_init)]
         self.grid_map = np.array(grid_map)
@@ -47,6 +48,7 @@ class RRT:
         self.smoothed_path = []
         self.goal_bias = goal_bias
         self.goal = goal
+        self.step = step
 
     def add_state(self, states, parent):
         node = Node(states)
@@ -54,7 +56,7 @@ class RRT:
         self.nodes.append(node)
         self.node_positions.append(states)
 
-        # Rebuild kd-tree only every rebuild_freq
+        # Rebuild kd-tree only after every rebuild_freq
         if len(self.nodes) % self.rebuild_freq == 0:
             self.kd_tree = cKDTree(np.array(self.node_positions))
             self.kd_tree_needs_update = False
@@ -68,15 +70,15 @@ class RRT:
         _, idx = self.kd_tree.query(x_random)
         return self.nodes[idx]
 
-    def select_control(self, x_near, x_random, step):
+    def select_control(self, x_near, x_random):
         direction = x_random - x_near.states
         norm = np.linalg.norm(direction)
         if norm == 0:
             return np.zeros_like(direction)
-        return (direction / norm) * step
+        return (direction / norm) * self.step
 
-    def new_state(self, x_near, u, step):
-        return x_near.states + u * step
+    def new_state(self, x_near, u):
+        return x_near.states + u * self.step
 
     def valid(self, x1, x2=None):
         # Check nodes are in valid positions (In bounds / not in obstacles)
@@ -102,13 +104,14 @@ class RRT:
         for _ in range(k):
             if np.random.rand() < self.goal_bias:
                 x_random = self.goal
-            x_random = np.array([
-                np.random.uniform(0, self.map_width),
-                np.random.uniform(0, self.map_height)
-            ])
+            else:
+                x_random = np.array([
+                    np.random.uniform(0, self.map_width),
+                    np.random.uniform(0, self.map_height)
+                ])
             x_near = self.find_nearest_neighbour(x_random)
-            u = self.select_control(x_near, x_random, step=1)
-            x_new = self.new_state(x_near, u, step=1)
+            u = self.select_control(x_near, x_random)
+            x_new = self.new_state(x_near, u)
 
             if self.valid(x_near.states, x_new):
                 self.add_state(x_new, x_near)
@@ -163,7 +166,7 @@ grid_map[80][50] = 0
 
 # Create RRT
 start = time.time()
-rrt = RRT(x_init=start_coords, grid_map=grid_map, rebuild_freq=50, goal=goal_coords, goal_bias=0.05)
+rrt = RRT(x_init=start_coords, grid_map=grid_map, rebuild_freq=500, goal=goal_coords, goal_bias=0.05, step=1)
 rrt.grow(k=5000, r=0.5)
 end = time.time()
 print("RUn time: ", end - start)
