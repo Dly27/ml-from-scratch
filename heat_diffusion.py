@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 
 
-class HeatSource:
+class ThermalSource:
     def __init__(self,
                  source_type="none",
                  A=50,
@@ -54,59 +54,6 @@ class HeatSource:
             "pulsed": lambda: self.pulsed(X, Y, t),
         }
         return method_map.get(self.source_type, lambda: np.zeros_like(X))()
-
-class CoolingSource:
-
-    def __init__(self,
-                 source_type="none",
-                 A=50,
-                 center=(0.5, 0.5),
-                 sigma=0.02,
-                 R=0.3,
-                 omega=2 * np.pi / 50,
-                 t_pulse=20):
-        self.source_type = source_type
-        self.A = A
-        self.center = center
-        self.sigma = sigma
-        self.R = R
-        self.omega = omega
-        self.t_pulse = t_pulse
-
-    def stationary_gaussian(self, X, Y):
-        x0, y0 = self.center
-        return self.A * np.exp(-((X - x0)**2 + (Y - y0)**2) / (2 * self.sigma**2))
-
-    def lateral_gaussian(self, X, Y, t):
-        x0, y0 = self.center
-        x_t = x0 + self.R * np.sin(self.omega * t)
-        return self.A * np.exp(-((X - x_t)**2 + (Y - y0)**2) / (2 * self.sigma**2))
-
-    def circular_gaussian(self, X, Y, t):
-        x0, y0 = self.center
-        x_t = x0 + self.R * np.sin(self.omega * t)
-        y_t = y0 + self.R * np.cos(self.omega * t)
-        return self.A * np.exp(-((X - x_t)**2 + (Y - y_t)**2) / (2 * self.sigma**2))
-
-    def uniform(self, X, Y):
-        return self.A * np.ones_like(X)
-
-    def pulsed(self, X, Y, t):
-        if (t % self.t_pulse) < self.t_pulse // 2:
-            x0, y0 = self.center
-            return self.A * np.exp(-((X - x0)**2 + (Y - y0)**2) / (2 * self.sigma**2))
-        else:
-            return np.zeros_like(X)
-
-    def get_value(self, X, Y, t):
-        method_map = {
-            "stationary_gaussian": lambda: self.stationary_gaussian(X, Y),
-            "lateral_gaussian": lambda: self.lateral_gaussian(X, Y, t),
-            "circular_gaussian": lambda: self.circular_gaussian(X, Y, t),
-            "uniform": lambda: self.uniform(X, Y),
-            "pulsed": lambda: self.pulsed(X, Y, t),
-        }
-        return -method_map.get(self.source_type, lambda: np.zeros_like(X))()
 
 class Grid:
     def __init__(self, width, height, step, alpha, dt, nt):
@@ -160,7 +107,7 @@ class Grid:
 
     def animate(self, source_type="none", **kwargs):
         fig, ax = plt.subplots()
-        im = ax.imshow(self.temp_matrix, cmap='hot', interpolation='nearest', vmin=0, vmax=1.0)
+        im = ax.imshow(self.temp_matrix, cmap='hot', interpolation='nearest', vmin=np.min(self.temp_matrix), vmax=np.max(self.temp_matrix))
         plt.colorbar(im, ax=ax)
 
         def animate_func(frame):
@@ -191,8 +138,9 @@ if __name__ == "__main__":
     )
 
 
-    g.add_source(HeatSource(source_type="stationary_gaussian", A=50, center=(0.5, 0.5), sigma=0.02))
-    g.add_source(HeatSource(source_type="circular_gaussian", omega=2 * np.pi / 60,))
-    g.add_source(CoolingSource(source_type="uniform", A=0.2))
+    g.add_source(ThermalSource(source_type="stationary_gaussian", A=50, center=(0.5, 0.5), sigma=0.02))
+    g.add_source(ThermalSource(source_type="circular_gaussian", omega=2 * np.pi / 60, ))
+    g.add_source(ThermalSource(source_type="uniform", A=-0.2))
+    g.add_source(ThermalSource(source_type="pulsed", A=-50))
 
     g.animate()
