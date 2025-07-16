@@ -56,12 +56,11 @@ class ThermalSource:
         return method_map.get(self.source_type, lambda: np.zeros_like(X))()
 
 class Grid:
-    def __init__(self, width, height, step, alpha, dt, nt):
+    def __init__(self, width, height, step, dt, nt):
         self.width = width
         self.height = height
         self.dx = step
         self.dy = step
-        self.alpha = alpha
         self.dt = dt
         self.nt = nt
         self.temp_matrix = None
@@ -72,6 +71,7 @@ class Grid:
         y = np.linspace(0, self.height, self.ny)
         self.X, self.Y = np.meshgrid(x, y)
         self.sources = []
+        self.alpha_matrix = None
 
 
     def set_boundaries(self, left, right, top, bottom, boundary_type):
@@ -87,17 +87,27 @@ class Grid:
             self.temp_matrix[:, 0] = self.temp_matrix[:, 1]
             self.temp_matrix[:, -1] = self.temp_matrix[:, -2]
 
+    def create_alpha_matrix(self, default_alpha):
+        self.alpha_matrix = default_alpha * np.ones_like(self.temp_matrix)
+    def set_alpha_region(self, alpha_region, alpha):
+        mask = alpha_region(self.X, self.Y)
+        self.alpha_matrix[mask] = alpha
+
     def add_source(self, source):
         self.sources.append(source)
 
     def update(self, t):
         for n in range(self.nt):
             temp_matrix_new = self.temp_matrix.copy()
-            temp_matrix_new[1:-1, 1:-1] = self.temp_matrix[1:-1, 1:-1] + self.alpha * self.dt / self.dx ** 2 * (
+
+            laplacian = (
                     self.temp_matrix[2:, 1:-1] + self.temp_matrix[:-2, 1:-1] +
                     self.temp_matrix[1:-1, 2:] + self.temp_matrix[1:-1, :-2] -
                     4 * self.temp_matrix[1:-1, 1:-1]
             )
+
+
+            temp_matrix_new[1:-1, 1:-1] += self.alpha_matrix[1:-1, 1:-1] * self.dt / self.dx ** 2 * laplacian
 
             source_sum = np.zeros_like(self.temp_matrix)
             for source in self.sources:
@@ -124,7 +134,6 @@ if __name__ == "__main__":
         width=1,
         height=1,
         step=0.01,
-        alpha=0.08,
         dt=1e-5,
         nt=500
     )
@@ -137,10 +146,12 @@ if __name__ == "__main__":
         boundary_type="dirichlet"
     )
 
+    g.create_alpha_matrix(default_alpha=0.04)
+    g.set_alpha_region(alpha_region=lambda X, Y: (X > 0.3) & (X < 0.6) & (Y > 0.3) & (Y < 0.6), alpha=0.01)
+
 
     g.add_source(ThermalSource(source_type="stationary_gaussian", A=50, center=(0.5, 0.5), sigma=0.02))
     g.add_source(ThermalSource(source_type="circular_gaussian", omega=2 * np.pi / 60, ))
-    g.add_source(ThermalSource(source_type="uniform", A=-0.2))
-    g.add_source(ThermalSource(source_type="pulsed", A=-50))
+    g.add_source(ThermalSource(source_type="uniform", A=-0.5))
 
     g.animate()
