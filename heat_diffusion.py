@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
+from scipy.ndimage import laplace
 
 
 class ThermalSource:
@@ -72,6 +73,9 @@ class Grid:
         self.X, self.Y = np.meshgrid(x, y)
         self.sources = []
         self.alpha_matrix = None
+        self.k_matrix = None
+        self.rho_matrix = None
+        self.c_matrix = None
 
 
     def set_boundaries(self, left, right, top, bottom, boundary_type):
@@ -87,46 +91,36 @@ class Grid:
             self.temp_matrix[:, 0] = self.temp_matrix[:, 1]
             self.temp_matrix[:, -1] = self.temp_matrix[:, -2]
 
-    def create_alpha_matrix(self, default_alpha):
-        self.alpha_matrix = default_alpha * np.ones_like(self.temp_matrix)
-    def set_alpha_region(self, alpha_region, alpha):
-        mask = alpha_region(self.X, self.Y)
-        self.alpha_matrix[mask] = alpha
+    def create_alpha_matrix(self, k, rho, c):
+        self.k_matrix = np.ones_like(self.temp_matrix) * k
+        self.rho_matrix = np.ones_like(self.temp_matrix) * rho
+        self.c_matrix = np.ones_like(self.temp_matrix) * c
+        self.alpha_matrix = self.k_matrix / (self.rho_matrix * self.c_matrix)
+
+    def set_material_region(self, region_mask_fn, k=None, rho=None, c=None):
+        mask = region_mask_fn(self.X, self.Y)
+        if k is not None:
+            self.k_matrix[mask] = k
+        if rho is not None:
+            self.rho_matrix[mask] = rho
+        if c is not None:
+            self.c_matrix[mask] = c
+        self.alpha_matrix = self.k_matrix / (self.rho_matrix * self.c_matrix)
 
     def add_source(self, source):
         self.sources.append(source)
 
     def update(self, t):
-        for n in range(self.nt):
-            temp_matrix_new = self.temp_matrix.copy()
+        temp_matrix_new = self.temp_matrix.copy()
+        laplacian = laplace(self.temp_matrix, mode="nearest")
+        temp_matrix_new[1:-1, 1:-1] += self.alpha_matrix[1:-1, 1:-1] * self.dt / self.dx ** 2 * laplacian[1:-1, 1:-1]
 
-            laplacian = (
-                    self.temp_matrix[2:, 1:-1] + self.temp_matrix[:-2, 1:-1] +
-                    self.temp_matrix[1:-1, 2:] + self.temp_matrix[1:-1, :-2] -
-                    4 * self.temp_matrix[1:-1, 1:-1]
-            )
+        source_sum = np.zeros_like(self.temp_matrix)
+        for source in self.sources:
+            source_sum += source.get_value(self.X, self.Y, t)
 
+        self.temp_matrix = temp_matrix_new + self.dt * source_sum
 
-            temp_matrix_new[1:-1, 1:-1] += self.alpha_matrix[1:-1, 1:-1] * self.dt / self.dx ** 2 * laplacian
-
-            source_sum = np.zeros_like(self.temp_matrix)
-            for source in self.sources:
-                source_sum += source.get_value(self.X, self.Y, t)
-
-            self.temp_matrix = temp_matrix_new + self.dt * source_sum    # Multiply by dt to scale properly
-
-    def animate(self, source_type="none", **kwargs):
-        fig, ax = plt.subplots()
-        im = ax.imshow(self.temp_matrix, cmap='hot', interpolation='nearest', vmin=np.min(self.temp_matrix), vmax=np.max(self.temp_matrix))
-        plt.colorbar(im, ax=ax)
-
-        def animate_func(frame):
-            self.update(t=frame)
-            im.set_array(self.temp_matrix)
-            return [im]
-
-        ani = animation.FuncAnimation(fig, animate_func, frames=self.nt, interval=50, blit=True)
-        plt.show()
 
 if __name__ == "__main__":
 
@@ -134,10 +128,12 @@ if __name__ == "__main__":
         width=1,
         height=1,
         step=0.01,
-        dt=1e-5,
+        dt=1e-3,
         nt=500
     )
 
+    # Set initial and boundary temperature
+    g.temp_matrix[:] =0
     g.set_boundaries(
         left=0,
         right=0,
@@ -146,12 +142,42 @@ if __name__ == "__main__":
         boundary_type="dirichlet"
     )
 
-    g.create_alpha_matrix(default_alpha=0.04)
-    g.set_alpha_region(alpha_region=lambda X, Y: (X > 0.3) & (X < 0.6) & (Y > 0.3) & (Y < 0.6), alpha=0.01)
+    # Use water properties
+    g.create_alpha_matrix(k=0.6, rho=1000, c=4180)
 
 
-    g.add_source(ThermalSource(source_type="stationary_gaussian", A=50, center=(0.5, 0.5), sigma=0.02))
-    g.add_source(ThermalSource(source_type="circular_gaussian", omega=2 * np.pi / 60, ))
-    g.add_source(ThermalSource(source_type="uniform", A=-0.5))
+    source_power = 1000  # W/m² (1000 similar to sunlight intensity)
+    source_area = np.pi * (0.2)**2  # sigma = 0.02 = 2cm diameter, change area formula depending on source
+    total_energy_per_second = source_power * source_area  # in watts (J/s)
 
-    g.animate()
+    # Compute A so that dT = Q / (m * c), and m = ρ * V
+    mass = 1000 * source_area * 0.01  # set depth of grid = 1 cm (only used to model source) , 1000 = density of water
+    dT_per_second = total_energy_per_second / (mass * 4180)  # °C/s, 4180 = specific heat capacity of water
+
+    g.add_source(ThermalSource(
+        source_type="stationary_gaussian",
+        A=dT_per_second ,
+        center=(0.5, 0.5),
+        sigma=0.02
+    ))
+
+
+    def animate_func_fixed_scale(frame):
+        current_time = frame * g.dt  # convert frame count to seconds
+        g.update(t=current_time)
+        im.set_array(g.temp_matrix)
+        return [im]
+
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(
+        g.temp_matrix,
+        cmap='hot',
+        interpolation='nearest',
+        vmin=0,
+        vmax=100
+    )
+    plt.colorbar(im, ax=ax)
+
+    ani = animation.FuncAnimation(fig, animate_func_fixed_scale, frames=g.nt, interval=50, blit=True)
+    plt.show()
