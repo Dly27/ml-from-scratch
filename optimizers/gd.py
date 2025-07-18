@@ -2,7 +2,7 @@ import numpy as np
 from functions import *
 
 class Optimizer:
-    def step(self, params, *args, **kwargs):
+    def step(self, params, X, y):
         raise NotImplementedError
 
 class GradientDescent(Optimizer):
